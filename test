@@ -1,1 +1,106 @@
+// Selenium login automation for server.js
+// Scenario 1: Invalid login
+// Scenario 2: Valid login (password step + OTP step)
+//
+// Run:  1) npm start            (terminal 1)
+//       2) npm test             (terminal 2)
+//
+// Env vars:
+//   BASE_URL        default http://localhost:3000
+//   TEST_LOGIN      a REAL email/username from the users API   (Scenario 2)
+//   TEST_PASSWORD   that user's password (min 6 chars)         (Scenario 2)
+//   HEADLESS=true   run Chrome without a window
+//
+// Scenario 2 reads the OTP from the on-screen "Demo mode" box, so the server
+// must run with DEV_SHOW_OTP enabled (the default).
+
+const { describe, it, before, after } = require('node:test');
+const assert = require('node:assert/strict');
+const { Builder, By, until } = require('selenium-webdriver');
+const chrome = require('selenium-webdriver/chrome');
+
+const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';s
+const TEST_LOGIN = process.env.TEST_LOGIN;
+const TEST_PASSWORD = process.env.TEST_PASSWORD;
+
+// The users API is on Render's free tier and can take ~40s to wake up
+const SLOW = 60000;
+
+let driver;
+
+async function openLogin() {
+  await driver.get(`${BASE_URL}/login`);
+  await driver.wait(until.elementLocated(By.id('login')), 10000);
+}
+
+async function submitCredentials(login, password) {
+  await driver.findElement(By.id('login')).clear();
+  await driver.findElement(By.id('login')).sendKeys(login);
+  await driver.findElement(By.id('password')).clear();
+  await driver.findElement(By.id('password')).sendKeys(password);
+  await driver.findElement(By.css('button[type="submit"]')).click();
+}
+
+before(async () => {
+  const options = new chrome.Options();
+  if (process.env.HEADLESS === 'true') options.addArguments('--headless=new');
+  options.addArguments('--window-size=1280,900');
+  driver = await new Builder().forBrowser('chrome').setChromeOptions(options).build();
+  await driver.manage().setTimeouts({ implicit: 0, pageLoad: SLOW });
+});
+
+after(async () => {
+  if (driver) await driver.quit();
+});
+
+describe('Login automation', () => {
+  it('Scenario 1: invalid login shows an error and stays on /login', { timeout: SLOW + 10000 }, async () => {
+    await openLogin();
+    await submitCredentials('not.a.real.user@example.com', 'WrongPass123');
+
+    const error = await driver.wait(until.elementLocated(By.css('.err')), SLOW);
+    assert.equal(await error.getText(), 'Invalid credentials.');
+
+    // Not logged in and not sent to the OTP page
+    const url = await driver.getCurrentUrl();
+    assert.ok(url.endsWith('/login'), `expected to remain on /login, got ${url}`);
+
+    // Protected page must still redirect back to login
+    await driver.get(`${BASE_URL}/dashboard`);
+    assert.ok((await driver.getCurrentUrl()).endsWith('/login'));
+  });
+
+  it('Scenario 2: valid login passes password + OTP and reaches the dashboard', {
+    timeout: SLOW + 30000,
+    skip: !TEST_LOGIN || !TEST_PASSWORD ? 'Set TEST_LOGIN and TEST_PASSWORD to run this scenario' : false,
+  }, async () => {
+    await openLogin();
+    await submitCredentials(TEST_LOGIN, TEST_PASSWORD);
+
+    // Step 1: password accepted -> OTP page
+    await driver.wait(until.urlContains('/verify'), SLOW);
+    await driver.wait(until.elementLocated(By.id('otp')), 10000);
+
+    // Step 2: read the demo OTP from the page and submit it (code is valid for 30s)
+    const otpEl = await driver.wait(until.elementLocated(By.css('.note b')), 10000);
+    const otp = (await otpEl.getText()).trim();
+    assert.match(otp, /^\d{6}$/, 'OTP should be 6 digits');
+
+    await driver.findElement(By.id('otp')).sendKeys(otp);
+    await driver.findElement(By.id('verify')).click();
+
+    // Step 3: dashboard
+    await driver.wait(until.urlContains('/dashboard'), 10000);
+    const heading = await driver.findElement(By.css('h1')).getText();
+    assert.match(heading, /^Welcome,/);
+    const body = await driver.findElement(By.css('.card')).getText();
+    assert.match(body, /multi-factor authentication/);
+
+    // Log out and confirm the session is gone
+    await driver.findElement(By.linkText('Log out')).click();
+    await driver.wait(until.urlContains('/login'), 10000);
+    await driver.get(`${BASE_URL}/dashboard`);
+    assert.ok((await driver.getCurrentUrl()).endsWith('/login'));
+  });
+});
 
