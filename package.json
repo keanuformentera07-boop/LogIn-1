@@ -4,11 +4,15 @@
   "description": "Login validation with 30-second OTP multi-factor, backed by a users API",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test --test-concurrency=1 test/"
   },
   "engines": { "node": ">=18" },
   "dependencies": {
     "express": "^4.19.2",
     "express-session": "^1.18.0"
+  },
+  "devDependencies": {
+    "selenium-webdriver": "^4.25.0"
   }
 }
